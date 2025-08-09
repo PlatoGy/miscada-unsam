@@ -15,3 +15,9 @@ whole_image_segmentation/output
 *.egg-info/
 build/
 dist/
+
+/uploads
+/output
+/outputs
+/docs
+/static
