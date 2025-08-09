@@ -39,7 +39,8 @@ MODEL:
   BACKBONE:
     NAME: swin
     # PRETRAINED: 'https://github.com/SwinTransformer/storage/releases/download/v1.0.0/swin_tiny_patch4_window7_224.pth'
-    PRETRAINED: '/home/xudongw/UnSAM-Semantic/pretrained/moby_swin_t_300ep_pretrained.pth'
+    # PRETRAINED: '/home/xudongw/UnSAM-Semantic/pretrained/moby_swin_t_300ep_pretrained.pth'
+    PRETRAINED: '/home/mktd44/project/UnSAM/pretrained/moby_swin_t_300ep_pretrained.pth'
     LOAD_PRETRAINED: true
     SWIN:
       PRETRAIN_IMG_SIZE: 224
