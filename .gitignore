@@ -22,5 +22,7 @@ dist/
 /docs
 /static
 /promptable_segmentation/outputs
+/promptable_segmentation/datasets
+/promptable_segmentation/data_preprocessing
 
 .DS_Store
