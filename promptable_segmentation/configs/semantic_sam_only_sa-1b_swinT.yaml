@@ -11,22 +11,27 @@ WEIGHT: ''
 PORT: 53711
 VERBOSE: true
 
-OUTPUT_DIR: 'data/output/test'
+# 改：输出目录
+OUTPUT_DIR: 'output/liver_ft_caseSplit_v1'
+
 # misc
 LOADER:
-  JOINT: True
+  # 改：单数据集训练，禁用 JointLoader
+  JOINT: False
   KEY_DATASET: 'coco'
+
 # model
 MODEL:
   NAME: interactive_mask_dino
   HEAD: general_head
-  MASK_ON: false
+  MASK_ON: true
   KEYPOINT_ON: false
   LOAD_PROPOSALS: false
   DIM_PROJ: 512
   BACKBONE_DIM: 768
   BACKGROUND: False
-  WEIGHTS: ''
+  # 改：加载你的微调起点权重
+  WEIGHTS: 'checkpoints/unsam_plus_promptable_sa1b_1perc_ckpt_100k.pth'
   TEXT:
     ARCH: noencoder  # no language encoder for training only sa-1b data
     NAME: transformer
@@ -57,7 +62,7 @@ MODEL:
       DROP_PATH_RATE: 0.3
       APE: false
       PATCH_NORM: true
-      USE_CHECKPOINT: false
+      USE_CHECKPOINT: true
       OUT_FEATURES: [ 'res2', 'res3', 'res4', 'res5' ]
   ENCODER:
     NAME: encoder_deform
@@ -102,7 +107,7 @@ MODEL:
       GROUNDING:
         ENABLED: False
         MAX_LEN: 5
-    DEEP_SUPERVISION: True
+    DEEP_SUPERVISION: False
     NO_OBJECT_WEIGHT: 0.1
     CLASS_WEIGHT: 4.0
     MASK_WEIGHT: 5.0
@@ -124,10 +129,10 @@ MODEL:
     PRE_NORM: False
     ENFORCE_INPUT_PROJ: False
     SIZE_DIVISIBILITY: 32
-    DEC_LAYERS: 9  # 9 decoder layers, add one for the loss on learnable query
-    TRAIN_NUM_POINTS: 12544
-    OVERSAMPLE_RATIO: 3.0
-    IMPORTANCE_SAMPLE_RATIO: 0.75
+    DEC_LAYERS: 6  # 9 decoder layers, add one for the loss on learnable query
+    TRAIN_NUM_POINTS: 2048
+    OVERSAMPLE_RATIO: 1.0
+    IMPORTANCE_SAMPLE_RATIO: 0.5
     TWO_STAGE: False
     INITIALIZE_BOX_TYPE: 'no'
     DN: seg
@@ -136,15 +141,15 @@ MODEL:
     INITIAL_PRED: False
     LEARN_TGT: False
     TOTAL_NUM_FEATURE_LEVELS: 4
-    SEMANTIC_CE_LOSS: False
+    SEMANTIC_CE_LOSS: True
     PANO_BOX_LOSS: False
-    COCO: False
+    COCO: True
     O365: False
-    SAM: True
+    SAM: False
     PASCAL: False
-    RE_POINT: True
-    NUM_INTERACTIVE_TOKENS: 6
-    MAX_NUM_INSTANCE: 60
+    RE_POINT: False
+    NUM_INTERACTIVE_TOKENS: 1
+    MAX_NUM_INSTANCE: 16
     TEST:
       SEMANTIC_ON: True
       INSTANCE_ON: True
@@ -158,13 +163,16 @@ MODEL:
       PANO_TRANSFORM_EVAL: True
       PANO_TEMPERATURE: 0.06
 
+# 改：把评估周期改小，便于观测
 TEST:
-  EVAL_PERIOD: 500000
+  EVAL_PERIOD: 1000
   PRECISE_BN:
     NUM_ITER: 1
     ENABLED: False
   AUG:
     ENABLED: False
+  # 新增：本仓库 dataloader 也会读取 TEST.BATCH_SIZE_TOTAL
+  BATCH_SIZE_TOTAL: 4
 
 SAM:
   INPUT:
@@ -265,41 +273,56 @@ VLP:
     SAMPLER_TRAIN: "TrainingSampler"
     ASPECT_RATIO_GROUPING: True
 
+# 改：补齐 DatasetMapper 训练/测试所需的 INPUT 键
 INPUT:
   PIXEL_MEAN: [123.675, 116.280, 103.530]
   PIXEL_STD: [58.395, 57.120, 57.375]
+  MIN_SIZE_TRAIN: [384]
+  MIN_SIZE_TRAIN_SAMPLING: "choice"
+  MAX_SIZE_TRAIN: 768
+  MIN_SIZE_TEST: 384
+  MAX_SIZE_TEST: 768
+  CROP:
+    ENABLED: False
+  RANDOM_FLIP: "none"
+  MASK_FORMAT: "bitmask"
+  FORMAT: "RGB"
 
+# 改：注册到你的 liver 数据集
 DATASETS:
-  TRAIN: ["sam_train"]
+  TRAIN: ["liver_train"]
   # interactive segmentation evaluation.
-  TEST: ["coco_2017_val_panoptic_with_sem_seg_interactive_jointboxpoint"]
-#  TEST: ["sam_minival"]
-
+  TEST: ["liver_val", "liver_test"]
   CLASS_CONCAT: false
   SIZE_DIVISIBILITY: 32
   PROPOSAL_FILES_TRAIN: []
 
+# 改：与 build.py 需求对齐，并降低 worker
 DATALOADER:
   FILTER_EMPTY_ANNOTATIONS: False
-  NUM_WORKERS: 16
+  NUM_WORKERS: 4
   LOAD_PROPOSALS: False
   SAMPLER_TRAIN: "TrainingSampler"
-  ASPECT_RATIO_GROUPING: True
+  ASPECT_RATIO_GROUPING: False
+
+# 新增：本仓库 build.py 读取的总 batch 键（与 IMS_PER_BATCH 对齐）
+TRAIN:
+  BATCH_SIZE_TOTAL: 2
 
 # Detectron2 training config for optimizer and lr scheduler
 SOLVER:
   BASE_LR_END: 0.0
   MOMENTUM: 0.9
   NESTEROV: False
-  CHECKPOINT_PERIOD: 5000
-  IMS_PER_BATCH: 1
+  CHECKPOINT_PERIOD: 1000           # 改：1000
+  IMS_PER_BATCH: 2                  # 改：4
   REFERENCE_WORLD_SIZE: 0
   BIAS_LR_FACTOR: 1.0
   WEIGHT_DECAY_BIAS: None
-  # original
-  BASE_LR: 0.0001
+  # 改：学习率与总迭代数
+  BASE_LR: 0.00001
   STEPS: [355552, 385184] # [327778, 355092]
-  MAX_ITER: 400000 #368750
+  MAX_ITER: 8000
   GAMMA: 0.1
   WARMUP_FACTOR: 1.0
   WARMUP_ITERS: 10
@@ -361,28 +384,6 @@ ADE20K:
     LOAD_PROPOSALS: False
     SAMPLER_TRAIN: "TrainingSampler"
     ASPECT_RATIO_GROUPING: True
-#ADE20K:
-#  INPUT:
-#    MIN_SIZE_TRAIN: 640
-#    MIN_SIZE_TRAIN_SAMPLING: "choice"
-#    MIN_SIZE_TEST: 640
-#    MAX_SIZE_TRAIN: 2560
-#    MAX_SIZE_TEST: 2560
-#    MASK_FORMAT: "polygon"
-#    CROP:
-#      ENABLED: True
-#      TYPE: "absolute"
-#      SIZE: (640, 640)
-#      SINGLE_CATEGORY_MAX_AREA: 1.0
-#    COLOR_AUG_SSD: True
-#    SIZE_DIVISIBILITY: 640  # used in dataset mapper
-#    DATASET_MAPPER_NAME: "mask_former_panoptic"
-#    FORMAT: "RGB"
-#  DATASET:
-#    DATASET: 'ade'
-#  TEST:
-#    BATCH_SIZE_TOTAL: 8
-
 
 REF:
   INPUT:
@@ -503,8 +504,6 @@ PSACAL_PART:
     MASK_ON: True
     KEYPOINT_ON: False
     LOAD_PROPOSALS: False
-  # DATASET:
-  #   DATASET: 'coco'
   TEST:
     DETECTIONS_PER_IMAGE: 100
     NAME: coco_eval
