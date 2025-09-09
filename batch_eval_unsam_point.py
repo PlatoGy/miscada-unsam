@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-专用：UnSAM 点提示接口批量评测脚本
-- 目录：脚本与 CT/ 同级；CT/<case_id>/DICOM_anon/*.dcm 与 CT/<case_id>/Ground/liver_GT_xxx.png
-- DICOM 命名两种：
+Dedicated: UnSAM Point Prompt Interface Batch Evaluation Script
+- Directory: The script is at the same level as the CT/ folder; CT/<case_id>/DICOM_anon/*.dcm and CT/<case_id>/Ground/liver_GT_xxx.png
+- Two types of DICOM naming:
     i0xxx,0000b.dcm        -> liver_GT_xxx.png
-    IMG-00nn-00xxx.dcm     -> liver_GT_xxx.png  (nn 忽略)
-- 每例头/中/尾各 5 张，共 15 张
-- 调用 http://localhost:8008/point_unsam (organ=liver)，可能返回 3-4 张；逐张计算 Dice/IoU
-- 记录客户端测得端到端时长 request_duration_s（秒）
-- 输出 CSV：batch_eval_unsam_results.csv
-依赖：pydicom, numpy, pillow, requests, scikit-image
+    IMG-00nn-00xxx.dcm     -> liver_GT_xxx.png  (ignore nn)
+- 5 slices per region (head/middle/tail), total 15 slices
+- Call http://localhost:8008/point_unsam (organ=liver), may return 3-4 images; calculate Dice/IoU per image
+- Record client measured end-to-end time `request_duration_s` (in seconds)
+- Output CSV: batch_eval_unsam_results.csv
+Dependencies: pydicom, numpy, pillow, requests, scikit-image
 """
 
 import os, re, csv, glob, random, time
@@ -21,24 +21,24 @@ from PIL import Image
 from skimage.io import imread
 from skimage.transform import resize
 
-# ===================== 配置 =====================
-CT_DIR = "./CT"                         # 根目录下 CT 文件夹
-OUT_DIR = "./eval_unsam_pngs"           # 输入 PNG 与可视化结果保存目录
+# ===================== Configuration =====================
+CT_DIR = "./CT"                         # Root directory for CT folder
+OUT_DIR = "./eval_unsam_pngs"           # Directory to save input PNGs and visualization results
 CSV_PATH = "./batch_eval_unsam_results.csv"
 
 US_BASE_URL = "http://localhost:8008"
 POINT_UNSAM_ENDPOINT = f"{US_BASE_URL}/point_unsam"
 
 RANDOM_SEED = 2025
-SLICES_PER_REGION = 5                   # 头/中/尾各取 5
-WINDOW_WW, WINDOW_WL = 400, 60          # 腹部常用窗宽/位
-TIMEOUT_POST = 180                      # 请求超时（秒）
+SLICES_PER_REGION = 5                   # 5 slices per head/middle/tail region
+WINDOW_WW, WINDOW_WL = 400, 60          # Common abdominal window width/level
+TIMEOUT_POST = 180                      # Request timeout (seconds)
 # ===============================================
 
 random.seed(RANDOM_SEED)
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# ---------- 工具函数 ----------
+# ---------- Utility Functions ----------
 def apply_window_hu_to_uint8(hu_slice, ww=400, wl=60):
     lo = wl - ww / 2.0
     hi = wl + ww / 2.0
@@ -61,10 +61,10 @@ def sort_key_for_dicom(ds):
 
 def extract_xxx_from_dicom_name(filename):
     """
-    支持：
-      i0xxx,0000b.dcm          -> 提取 xxx
-      IMG-00nn-00xxx.dcm       -> 提取 xxx (忽略 nn)
-    兜底：取文件名最后一串数字
+    Supports:
+      i0xxx,0000b.dcm          -> extract xxx
+      IMG-00nn-00xxx.dcm       -> extract xxx (ignore nn)
+    Default: Extract last digits in the filename
     """
     name = os.path.basename(filename)
     m1 = re.match(r"i0(\d+),\d+\w?\.dcm$", name, re.IGNORECASE)
@@ -80,7 +80,7 @@ def build_gt_path(gt_dir, xxx):
     cand = os.path.join(gt_dir, f"liver_GT_{xxx}.png")
     if os.path.exists(cand):
         return cand
-    # 容错：去前导零或补零到3/4位
+    # Fallback: remove leading zeros or pad to 3/4 digits
     xxx_int = int(xxx)
     for pat in (f"liver_GT_{xxx_int}.png",
                 f"liver_GT_{xxx_int:03d}.png",
@@ -88,7 +88,7 @@ def build_gt_path(gt_dir, xxx):
         p = os.path.join(gt_dir, pat)
         if os.path.exists(p):
             return p
-    # 兜底：扫描 Ground
+    # Fallback: Scan Ground directory
     for p in glob.glob(os.path.join(gt_dir, "liver_GT_*.png")):
         ms = re.search(r"liver_GT_(\d+)\.png$", os.path.basename(p))
         if ms and int(ms.group(1)) == xxx_int:
@@ -106,7 +106,7 @@ def ensure_3ch_uint8(img):
 
 def recover_pred_mask_from_overlay(overlay_rgb, original_rgb):
     """
-    还原预测掩膜（与 MedSAM 相同的着色约定）：
+    Recover the prediction mask (same coloring convention as MedSAM):
       vis[mask, 0] = 255; vis[mask, 1:] *= 0.5
     """
     R_ov = overlay_rgb[..., 0].astype(np.uint16)
@@ -150,7 +150,7 @@ def sample_15_indices(n_slices, k_per_region=5):
                 picked.extend(chosen)
     return sorted(picked)
 
-# ---------- 评测核心 ----------
+# ---------- Evaluation Core ----------
 def process_case(case_dir, rows):
     case_id = os.path.basename(case_dir)
     dicom_dir = os.path.join(case_dir, "DICOM_anon")
@@ -164,7 +164,7 @@ def process_case(case_dir, rows):
     if not dicom_files:
         print(f"[WARN] {case_id}: no DICOM files, skip"); return
 
-    # 读取+排序
+    # Read and sort
     dsets = []
     for fp in dicom_files:
         try:
@@ -188,14 +188,14 @@ def process_case(case_dir, rows):
             print(f"[WARN] {case_id}: cannot parse slice number from {os.path.basename(fp)}, skip")
             continue
 
-        # 生成输入 PNG
+        # Generate input PNG
         hu = dicom_to_hu(ds)
         x8 = apply_window_hu_to_uint8(hu, WINDOW_WW, WINDOW_WL)
         rgb = np.stack([x8, x8, x8], axis=-1)
         png_path = os.path.join(OUT_DIR, f"{case_id}_xxx{xxx}.png")
         Image.fromarray(rgb).save(png_path)
 
-        # 取 GT
+        # Get GT
         gt_path = build_gt_path(gt_dir, xxx)
         gt_mask = None
         if gt_path and os.path.exists(gt_path):
@@ -203,7 +203,7 @@ def process_case(case_dir, rows):
             if g.ndim == 3: g = g[..., 0]
             gt_mask = (g > 0).astype(np.uint8)
 
-        # 调用 UnSAM 点提示
+        # Call UnSAM point prompt
         try:
             with open(png_path, "rb") as f:
                 files = {"file": (os.path.basename(png_path), f, "image/png")}
@@ -217,7 +217,7 @@ def process_case(case_dir, rows):
             print(f"[ERROR] {case_id} xxx={xxx}: UnSAM request failed: {e}")
             continue
 
-        # 解析返回的多张结果
+        # Parse returned results
         urls = []
         if isinstance(payload, dict):
             if "segmentation_results" in payload and isinstance(payload["segmentation_results"], list):
@@ -251,10 +251,10 @@ def process_case(case_dir, rows):
                 "case_id": case_id,
                 "dicom_file": os.path.basename(fp),
                 "xxx": xxx,
-                "variant_idx": vi,                 # UnSAM 的第几张候选
+                "variant_idx": vi,                 # UnSAM candidate index
                 "input_png": png_path,
                 "overlay_url": u,
-                "request_duration_s": round(dur, 2),   # 客户端端到端时间
+                "request_duration_s": round(dur, 2),   # Client end-to-end time
                 "dice": None if np.isnan(dice) else round(dice, 4),
                 "iou":  None if np.isnan(iou)  else round(iou, 4),
             })
